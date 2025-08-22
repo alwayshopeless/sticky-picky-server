@@ -31,6 +31,10 @@ function generateToken() {
  return crypto.randomBytes(32).toString('hex')
 }
 
+function generateSpUid() {
+ return 'sp-uid-' + crypto.randomBytes(8).toString('hex');
+}
+
 async function authenticateMatrixUser(user_token, homeserver) {
  const url = `https://${homeserver}/_matrix/federation/v1/openid/userinfo?access_token=${encodeURIComponent(user_token)}`;
  let response
@@ -134,11 +138,11 @@ fastify.post('/api/v1/stickerpacks', async (req, reply) => {
 * Import stickerpacks from standart Maunium repository
 * */
 fastify.post('/api/v1/stickerpacks/import', async (req, reply) => {
- const {repository, type = "maunium"} = req.body;
+ let {repository, type = "maunium"} = req.body;
  if (!repository || !/^https?:\/\//.test(repository)) {
   return reply.code(400).send({error: "Invalid repository"});
  }
-
+ repository = repository.replace(/\/+$/, '');
  let indexJson;
  try {
   const res = await fetch(repository + "/packs/index.json");
@@ -153,7 +157,6 @@ fastify.post('/api/v1/stickerpacks/import', async (req, reply) => {
 
  for (const pack of indexJson.packs) {
   try {
-   // Загружаем JSON каждого пака
    const packUrl = `${repository}/packs/${pack}`;
    let packJson;
    try {
@@ -247,6 +250,31 @@ fastify.post('/api/v1/user/stickerpacks/remove', {
  return {success: true}
 });
 
+
+fastify.get('/api/v1/user/stickers', {preHandler: authMiddle}, async (req, reply) => {
+ const user = req.user;
+
+ let favorites = [];
+ let recent = [];
+
+ try {
+  favorites = JSON.parse(user.favorites || '[]');
+ } catch (e) {
+  favorites = [];
+ }
+
+ try {
+  recent = JSON.parse(user.recent || '[]');
+ } catch (e) {
+  recent = [];
+ }
+
+ return {
+  favorites,
+  recent
+ };
+});
+
 fastify.get('/api/v1/stickerpacks/search', async (req, reply) => {
  const {q} = req.query;
  if (!q) return reply.code(400).send({error: "Missing search query"});
@@ -257,6 +285,99 @@ fastify.get('/api/v1/stickerpacks/search', async (req, reply) => {
                           WHERE name LIKE ?`).all(`%${q}%`);
  return {results: rows};
 });
+
+
+fastify.post('/api/v1/user/stickers/favorites/add', {preHandler: authMiddle}, async (req, reply) => {
+ const {repository, body, url, info} = req.body;
+ if (!repository || !body || !url || !info) return reply.code(400).send({error: "Missing required fields"});
+
+ const db = fastify.betterSqlite3;
+ const user = req.user;
+
+ let favorites = JSON.parse(user.favorites || '[]');
+ const spUid = generateSpUid();
+
+ const newSticker = {spUid, repository, body, url, info};
+
+ // Удаляем дубликаты по url
+ favorites = favorites.filter(sticker => sticker.url !== url);
+
+ // Удаляем последний, если больше 10
+ if (favorites.length >= 10) favorites.pop();
+
+ favorites.unshift(newSticker); // добавляем в начало
+
+ db.prepare(`UPDATE users
+             SET favorites = ?
+             WHERE id = ?`)
+  .run(JSON.stringify(favorites), user.id);
+
+ return {success: true, sticker: newSticker};
+});
+
+fastify.post('/api/v1/user/stickers/favorites/remove', {preHandler: authMiddle}, async (req, reply) => {
+ const {spUid} = req.body;
+ if (!spUid) return reply.code(400).send({error: "Missing spUid"});
+
+ const db = fastify.betterSqlite3;
+ const user = req.user;
+
+ let favorites = JSON.parse(user.favorites || '[]');
+ favorites = favorites.filter(sticker => sticker.spUid !== spUid);
+
+ db.prepare(`UPDATE users
+             SET favorites = ?
+             WHERE id = ?`)
+  .run(JSON.stringify(favorites), user.id);
+
+ return {success: true};
+});
+
+fastify.post('/api/v1/user/stickers/recent/add', {preHandler: authMiddle}, async (req, reply) => {
+ const {repository, body, url, info} = req.body;
+ if (!repository || !body || !url || !info) return reply.code(400).send({error: "Missing required fields"});
+
+ const db = fastify.betterSqlite3;
+ const user = req.user;
+
+ let recent = JSON.parse(user.recent || '[]');
+ const spUid = generateSpUid();
+
+ const newSticker = {spUid, repository, body, url, info};
+
+ // Удаляем дубликаты по url
+ recent = recent.filter(sticker => sticker.url !== url);
+
+ if (recent.length >= 20) recent.pop();
+
+ recent.unshift(newSticker);
+
+ db.prepare(`UPDATE users
+             SET recent = ?
+             WHERE id = ?`)
+  .run(JSON.stringify(recent), user.id);
+
+ return {success: true, sticker: newSticker};
+});
+
+fastify.post('/api/v1/user/stickers/recent/remove', {preHandler: authMiddle}, async (req, reply) => {
+ const {spUid} = req.body;
+ if (!spUid) return reply.code(400).send({error: "Missing spUid"});
+
+ const db = fastify.betterSqlite3;
+ const user = req.user;
+
+ let recent = JSON.parse(user.recent || '[]');
+ recent = recent.filter(sticker => sticker.spUid !== spUid);
+
+ db.prepare(`UPDATE users
+             SET recent = ?
+             WHERE id = ?`)
+  .run(JSON.stringify(recent), user.id);
+
+ return {success: true};
+});
+
 
 try {
  await fastify.listen({port: 3000})
