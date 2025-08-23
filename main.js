@@ -1,27 +1,34 @@
 import Fastify from 'fastify'
-import fastifyBetterSqlite3 from "@punkish/fastify-better-sqlite3";
-import Database from 'better-sqlite3';
-import * as fs from 'fs';
+import mysql from 'mysql2/promise';
+import fs from 'fs';
 import cors from '@fastify/cors'
 import * as crypto from 'crypto';
+import {dbConfig} from "./config/db.js";
 
-const fastify = Fastify({
- logger: true
-})
+const fastify = Fastify({logger: true})
 
 await fastify.register(cors, {origin: '*'})
 
-fastify.register(fastifyBetterSqlite3, {
- class: Database, pathToDb: './db.sqlite',
-});
+// MySQL pool
+const pool = mysql.createPool(dbConfig);
 
-fastify.after(() => {
- const db = fastify.betterSqlite3;
+// Инициализация схемы из файла
+async function initSchema() {
  const schema = fs.readFileSync('./schema.sql', 'utf-8');
- db.exec(schema);
-});
+ const statements = schema.split(';').map(s => s.trim()).filter(s => s.length);
+ const conn = await pool.getConnection();
+ try {
+  for (const stmt of statements) {
+   await conn.query(stmt);
+  }
+ } finally {
+  conn.release();
+ }
+}
 
-// helpers
+await initSchema();
+
+// Helpers
 function normalizeName(name, internal_name) {
  if (!name) return internal_name.substring(0, 40);
  return name.substring(0, 40);
@@ -35,113 +42,95 @@ function generateSpUid() {
  return 'sp-uid-' + crypto.randomBytes(8).toString('hex');
 }
 
+// Authenticate Matrix user
 async function authenticateMatrixUser(user_token, homeserver) {
  const url = `https://${homeserver}/_matrix/federation/v1/openid/userinfo?access_token=${encodeURIComponent(user_token)}`;
- let response
+ let response;
  try {
-  response = await fetch(url)
+  response = await fetch(url);
  } catch (e) {
-  return null
+  return null;
  }
 
- if (!response.ok) return null
- const data = await response.json()
+ if (!response.ok) return null;
+ const data = await response.json();
 
- let username = data.sub.split(":")[0].replace("@", "")
- const expected = `@${username}:${homeserver}`
-
- if (data.sub === expected) return expected
- return null
+ let username = data.sub.split(":")[0].replace("@", "");
+ const expected = `@${username}:${homeserver}`;
+ return data.sub === expected ? expected : null;
 }
 
-
-function authenticateByToken(token, fastify) {
- const db = fastify.betterSqlite3
- console.log(db.prepare(`SELECT *
-                         FROM users
-                         WHERE token = ?`).get(token))
- return db.prepare(`SELECT *
-                    FROM users
-                    WHERE token = ?`).get(token)
+// Authenticate by token
+async function authenticateByToken(token) {
+ const [rows] = await pool.query(`SELECT *
+                                  FROM users
+                                  WHERE token = ?`, [token]);
+ return rows[0];
 }
 
-
+// Middleware
 const authMiddle = async (req, reply) => {
+ const token = req.headers['authorization']?.replace('Bearer ', '');
+ if (!token) return reply.code(401).send({error: "Missing token"});
 
- const token = req.headers['authorization']?.replace('Bearer ', '')
- if (!token) return reply.code(401).send({error: "Missing token"})
+ const user = await authenticateByToken(token);
+ if (!user) return reply.code(401).send({error: "Invalid token"});
 
- const user = authenticateByToken(token, fastify)
- if (!user) return reply.code(401).send({error: "Invalid token"})
-
- req.user = user
+ req.user = user;
 };
 
-
+// Routes
 fastify.post('/api/v1/auth/login', async (req, reply) => {
- const {user_token, homeserver} = req.body
- if (!user_token || !homeserver) return reply.code(400).send({error: "Missing required fields"})
+ const {user_token, homeserver} = req.body;
+ if (!user_token || !homeserver) return reply.code(400).send({error: "Missing required fields"});
 
- const matrixId = await authenticateMatrixUser(user_token, homeserver)
- if (!matrixId) return reply.code(401).send({error: "Invalid Matrix token"})
+ const matrixId = await authenticateMatrixUser(user_token, homeserver);
+ if (!matrixId) return reply.code(401).send({error: "Invalid Matrix token"});
 
- const db = fastify.betterSqlite3
- let user = db.prepare(`SELECT *
-                        FROM users
-                        WHERE matrix_id = ?`).get(matrixId)
+ const [rows] = await pool.query(`SELECT *
+                                  FROM users
+                                  WHERE matrix_id = ?`, [matrixId]);
+ let user = rows[0];
 
  if (!user) {
-  const token = generateToken()
-  const info = db.prepare(`INSERT INTO users (matrix_id, token)
-                           VALUES (?, ?)`).run(matrixId, token)
-  user = {id: info.lastInsertRowid, matrix_id: matrixId, token}
+  const token = generateToken();
+  const [result] = await pool.query(`INSERT INTO users (matrix_id, token)
+                                     VALUES (?, ?)`, [matrixId, token]);
+  user = {id: result.insertId, matrix_id: matrixId, token};
  }
 
- // If user already exists but has no token (old users), generate one
  if (!user.token) {
-  const token = generateToken()
-  db.prepare(`UPDATE users
-              SET token = ?
-              WHERE id = ?`).run(token, user.id)
-  user.token = token
+  const token = generateToken();
+  await pool.query(`UPDATE users
+                    SET token = ?
+                    WHERE id = ?`, [token, user.id]);
+  user.token = token;
  }
 
- return {token: user.token, matrix_id: user.matrix_id}
-})
+ return {token: user.token, matrix_id: user.matrix_id};
+});
 
-
-// routes
+// Stickerpacks CRUD
 fastify.post('/api/v1/stickerpacks', async (req, reply) => {
  const {repository, homeserver, internal_name, name, type = "maunium"} = req.body;
- if (!repository || !homeserver || !internal_name) {
-  return reply.code(400).send({error: "Missing required fields"});
- }
- if (!/^https?:\/\/.+\/$/.test(repository)) {
-  return reply.code(400).send({error: "repository must be http(s)://.../ and end with /"});
- }
+ if (!repository || !homeserver || !internal_name) return reply.code(400).send({error: "Missing required fields"});
+ if (!/^https?:\/\/.+\/$/.test(repository)) return reply.code(400).send({error: "repository must be http(s)://.../ and end with /"});
 
- const db = fastify.betterSqlite3;
  try {
-  const stmt = db.prepare(`
-      INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type)
-      VALUES (?, ?, ?, ?, ?)
-  `);
-  const info = stmt.run(repository, homeserver, normalizeName(name, internal_name), internal_name, type);
-  return {stickerpack_id: info.lastInsertRowid};
+  const [result] = await pool.query(
+   `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type)
+    VALUES (?, ?, ?, ?, ?)`,
+   [repository, homeserver, normalizeName(name, internal_name), internal_name, type]
+  );
+  return {stickerpack_id: result.insertId};
  } catch (err) {
   return reply.code(400).send({error: err.message});
  }
 });
 
-
-/*
-* Import stickerpacks from standart Maunium repository
-* */
 fastify.post('/api/v1/stickerpacks/import', async (req, reply) => {
  let {repository, type = "maunium"} = req.body;
- if (!repository || !/^https?:\/\//.test(repository)) {
-  return reply.code(400).send({error: "Invalid repository"});
- }
+ if (!repository || !/^https?:\/\//.test(repository)) return reply.code(400).send({error: "Invalid repository"});
  repository = repository.replace(/\/+$/, '');
  let indexJson;
  try {
@@ -152,9 +141,7 @@ fastify.post('/api/v1/stickerpacks/import', async (req, reply) => {
   return reply.code(400).send({error: "Fetch error"});
  }
 
- const db = fastify.betterSqlite3;
  const created = [];
-
  for (const pack of indexJson.packs) {
   try {
    const packUrl = `${repository}/packs/${pack}`;
@@ -163,181 +150,124 @@ fastify.post('/api/v1/stickerpacks/import', async (req, reply) => {
     const res = await fetch(packUrl);
     if (!res.ok) throw new Error(`Failed to fetch ${packUrl}`);
     packJson = await res.json();
-   } catch (e) {
+   } catch {
     created.push({internal_name: pack, status: "error", error: "Failed to fetch pack.json"});
     continue;
    }
 
-   const stmt = db.prepare(`
-       INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type)
-       VALUES (?, ?, ?, ?, ?)
-   `);
-   const info = stmt.run(
-    repository,
-    indexJson.homeserver_url,
-    packJson.title || pack,
-    pack,
-    type
+   const [result] = await pool.query(
+    `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type)
+     VALUES (?, ?, ?, ?, ?)`,
+    [repository, indexJson.homeserver_url, packJson.title || pack, pack, type]
    );
-   created.push({internal_name: pack, stickerpack_id: info.lastInsertRowid, status: "success"});
+   created.push({internal_name: pack, stickerpack_id: result.insertId, status: "success"});
   } catch (e) {
-   // console.log(e);
    let status = "error";
-   if (e.code == "SQLITE_CONSTRAINT_UNIQUE") {
-    status = "already_exists";
-   }
-   created.push({internal_name: pack, status: status});
+   if (e.code === "ER_DUP_ENTRY") status = "already_exists";
+   created.push({internal_name: pack, status});
   }
  }
-
  return {imported: created};
 });
 
-
 fastify.get('/api/v1/stickerpacks/all', async (req, reply) => {
- const db = fastify.betterSqlite3;
-
- const q = (req.query ?? {});
+ const q = req.query ?? {};
  const limit = Math.min(Math.max(Number(q.limit) || 20, 1), 100);
  const offset = Math.max(Number(q.offset) || 0, 0);
  const search = (q.search || "").toString().trim();
-
  const searchTerm = `%${search}%`;
 
- const rows = db.prepare(`
-     SELECT *
-     FROM stickerpacks
-     WHERE (? = '' OR name LIKE ? COLLATE NOCASE)
-     ORDER BY id ASC LIMIT ?
-     OFFSET ?
- `).all(search, searchTerm, limit, offset);
+ const [rows] = await pool.query(
+  `SELECT *
+   FROM stickerpacks
+   WHERE ? = ''
+      OR name LIKE ?
+   ORDER BY id ASC LIMIT ?
+   OFFSET ?`,
+  [search, searchTerm, limit, offset]
+ );
 
- const totalRow = db.prepare(`
-     SELECT COUNT(*) AS total
-     FROM stickerpacks
-     WHERE (? = '' OR name LIKE ? COLLATE NOCASE)
- `).get(search, searchTerm);
-
- const total = Number(totalRow.total) || 0;
+ const [totalRows] = await pool.query(
+  `SELECT COUNT(*) AS total
+   FROM stickerpacks
+   WHERE ? = ''
+      OR name LIKE ?`,
+  [search, searchTerm]
+ );
+ const total = Number(totalRows[0].total) || 0;
  const hasMore = offset + rows.length < total;
 
  let packsMap = {};
- rows.forEach(item => {
-  packsMap[item.id] = item;
- });
+ rows.forEach(item => packsMap[item.id] = item);
 
  return {stickerpacks: packsMap, total, hasMore, limit, offset, search};
 });
 
-
-fastify.post('/api/v1/user/stickerpacks', {
- preHandler: authMiddle
-}, async (req, reply,) => {
- const db = fastify.betterSqlite3
- const user = req.user
- const rows = db.prepare(`
-     SELECT s.*, usp.stickerpack_id
-     FROM user_stickerpacks usp
-              JOIN stickerpacks s ON usp.stickerpack_id = s.id
-     WHERE usp.user_id = ?
- `).all(user.id)
-
- return {stickerpacks: rows}
+// User stickerpacks
+fastify.post('/api/v1/user/stickerpacks', {preHandler: authMiddle}, async (req, reply) => {
+ const user = req.user;
+ const [rows] = await pool.query(
+  `SELECT s.*, usp.stickerpack_id
+   FROM user_stickerpacks usp
+            JOIN stickerpacks s ON usp.stickerpack_id = s.id
+   WHERE usp.user_id = ?`,
+  [user.id]
+ );
+ return {stickerpacks: rows};
 });
 
-fastify.post('/api/v1/user/stickerpacks/add', {
- preHandler: authMiddle
-}, async (req, reply) => {
- const {stickerpack_id} = req.body
- const db = fastify.betterSqlite3
- const user = req.user
-
+fastify.post('/api/v1/user/stickerpacks/add', {preHandler: authMiddle}, async (req, reply) => {
+ const {stickerpack_id} = req.body;
+ const user = req.user;
  try {
-  db.prepare(`INSERT INTO user_stickerpacks (user_id, stickerpack_id)
-              VALUES (?, ?)`).run(user.id, stickerpack_id)
+  await pool.query(`INSERT INTO user_stickerpacks (user_id, stickerpack_id)
+                    VALUES (?, ?)`, [user.id, stickerpack_id]);
  } catch (e) {
-  return reply.code(400).send({error: e.message})
+  return reply.code(400).send({error: e.message});
  }
- return {success: true}
-})
-
-fastify.post('/api/v1/user/stickerpacks/remove', {
- preHandler: authMiddle
-}, async (req, reply) => {
- const {stickerpack_id} = req.body
- const db = fastify.betterSqlite3
- const user = req.user
- console.log(stickerpack_id)
- db.prepare(`DELETE
-             FROM user_stickerpacks
-             WHERE user_id = ?
-               AND stickerpack_id = ?`)
-  .run(user.id, stickerpack_id)
- return {success: true}
+ return {success: true};
 });
 
+fastify.post('/api/v1/user/stickerpacks/remove', {preHandler: authMiddle}, async (req, reply) => {
+ const {stickerpack_id} = req.body;
+ const user = req.user;
+ await pool.query(`DELETE
+                   FROM user_stickerpacks
+                   WHERE user_id = ?
+                     AND stickerpack_id = ?`, [user.id, stickerpack_id]);
+ return {success: true};
+});
+
+// User stickers (favorites/recent)
+async function updateUserStickers(user, column, sticker, limit) {
+ let stickers = JSON.parse(user[column] || '[]');
+ const spUid = generateSpUid();
+ const newSticker = {spUid, ...sticker};
+
+ stickers = stickers.filter(s => s.url !== sticker.url);
+ if (stickers.length >= limit) stickers.pop();
+ stickers.unshift(newSticker);
+
+ await pool.query(`UPDATE users
+                   SET ${column} = ?
+                   WHERE id = ?`, [JSON.stringify(stickers), user.id]);
+ return newSticker;
+}
 
 fastify.get('/api/v1/user/stickers', {preHandler: authMiddle}, async (req, reply) => {
  const user = req.user;
-
- let favorites = [];
- let recent = [];
-
- try {
-  favorites = JSON.parse(user.favorites || '[]');
- } catch (e) {
-  favorites = [];
- }
-
- try {
-  recent = JSON.parse(user.recent || '[]');
- } catch (e) {
-  recent = [];
- }
-
  return {
-  favorites,
-  recent
+  favorites: JSON.parse(user.favorites || '[]'),
+  recent: JSON.parse(user.recent || '[]')
  };
 });
-
-fastify.get('/api/v1/stickerpacks/search', async (req, reply) => {
- const {q} = req.query;
- if (!q) return reply.code(400).send({error: "Missing search query"});
-
- const db = fastify.betterSqlite3;
- const rows = db.prepare(`SELECT *
-                          FROM stickerpacks
-                          WHERE name LIKE ?`).all(`%${q}%`);
- return {results: rows};
-});
-
 
 fastify.post('/api/v1/user/stickers/favorites/add', {preHandler: authMiddle}, async (req, reply) => {
  const {repository, body, url, info} = req.body;
  if (!repository || !body || !url || !info) return reply.code(400).send({error: "Missing required fields"});
 
- const db = fastify.betterSqlite3;
- const user = req.user;
-
- let favorites = JSON.parse(user.favorites || '[]');
- const spUid = generateSpUid();
-
- const newSticker = {spUid, repository, body, url, info};
-
- // Удаляем дубликаты по url
- favorites = favorites.filter(sticker => sticker.url !== url);
-
- // Удаляем последний, если больше 10
- if (favorites.length >= 10) favorites.pop();
-
- favorites.unshift(newSticker); // добавляем в начало
-
- db.prepare(`UPDATE users
-             SET favorites = ?
-             WHERE id = ?`)
-  .run(JSON.stringify(favorites), user.id);
-
+ const sticker = {repository, body, url, info};
+ const newSticker = await updateUserStickers(req.user, 'favorites', sticker, 10);
  return {success: true, sticker: newSticker};
 });
 
@@ -345,17 +275,12 @@ fastify.post('/api/v1/user/stickers/favorites/remove', {preHandler: authMiddle},
  const {spUid} = req.body;
  if (!spUid) return reply.code(400).send({error: "Missing spUid"});
 
- const db = fastify.betterSqlite3;
  const user = req.user;
-
  let favorites = JSON.parse(user.favorites || '[]');
  favorites = favorites.filter(sticker => sticker.spUid !== spUid);
-
- db.prepare(`UPDATE users
-             SET favorites = ?
-             WHERE id = ?`)
-  .run(JSON.stringify(favorites), user.id);
-
+ await pool.query(`UPDATE users
+                   SET favorites = ?
+                   WHERE id = ?`, [JSON.stringify(favorites), user.id]);
  return {success: true};
 });
 
@@ -363,26 +288,8 @@ fastify.post('/api/v1/user/stickers/recent/add', {preHandler: authMiddle}, async
  const {repository, body, url, info} = req.body;
  if (!repository || !body || !url || !info) return reply.code(400).send({error: "Missing required fields"});
 
- const db = fastify.betterSqlite3;
- const user = req.user;
-
- let recent = JSON.parse(user.recent || '[]');
- const spUid = generateSpUid();
-
- const newSticker = {spUid, repository, body, url, info};
-
- // Удаляем дубликаты по url
- recent = recent.filter(sticker => sticker.url !== url);
-
- if (recent.length >= 20) recent.pop();
-
- recent.unshift(newSticker);
-
- db.prepare(`UPDATE users
-             SET recent = ?
-             WHERE id = ?`)
-  .run(JSON.stringify(recent), user.id);
-
+ const sticker = {repository, body, url, info};
+ const newSticker = await updateUserStickers(req.user, 'recent', sticker, 20);
  return {success: true, sticker: newSticker};
 });
 
@@ -390,24 +297,30 @@ fastify.post('/api/v1/user/stickers/recent/remove', {preHandler: authMiddle}, as
  const {spUid} = req.body;
  if (!spUid) return reply.code(400).send({error: "Missing spUid"});
 
- const db = fastify.betterSqlite3;
  const user = req.user;
-
  let recent = JSON.parse(user.recent || '[]');
  recent = recent.filter(sticker => sticker.spUid !== spUid);
-
- db.prepare(`UPDATE users
-             SET recent = ?
-             WHERE id = ?`)
-  .run(JSON.stringify(recent), user.id);
-
+ await pool.query(`UPDATE users
+                   SET recent = ?
+                   WHERE id = ?`, [JSON.stringify(recent), user.id]);
  return {success: true};
 });
 
+// Stickerpacks search
+fastify.get('/api/v1/stickerpacks/search', async (req, reply) => {
+ const {q} = req.query;
+ if (!q) return reply.code(400).send({error: "Missing search query"});
 
+ const [rows] = await pool.query(`SELECT *
+                                  FROM stickerpacks
+                                  WHERE name LIKE ?`, [`%${q}%`]);
+ return {results: rows};
+});
+
+// Start server
 try {
- await fastify.listen({port: 3000})
+ await fastify.listen({port: 3000});
 } catch (err) {
- fastify.log.error(err)
- process.exit(1)
+ fastify.log.error(err);
+ process.exit(1);
 }
