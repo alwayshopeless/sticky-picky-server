@@ -194,15 +194,41 @@ fastify.post('/api/v1/stickerpacks/import', async (req, reply) => {
 });
 
 
-fastify.get('/api/v1/stickerpacks/all', {}, async (req, reply,) => {
- const db = fastify.betterSqlite3
+fastify.get('/api/v1/stickerpacks/all', async (req, reply) => {
+ const db = fastify.betterSqlite3;
+
+ const q = (req.query ?? {});
+ const limit = Math.min(Math.max(Number(q.limit) || 20, 1), 100);
+ const offset = Math.max(Number(q.offset) || 0, 0);
+ const search = (q.search || "").toString().trim();
+
+ const searchTerm = `%${search}%`;
+
  const rows = db.prepare(`
      SELECT *
      FROM stickerpacks
- `).all()
+     WHERE (? = '' OR name LIKE ? COLLATE NOCASE)
+     ORDER BY id ASC LIMIT ?
+     OFFSET ?
+ `).all(search, searchTerm, limit, offset);
 
- return {stickerpacks: rows}
+ const totalRow = db.prepare(`
+     SELECT COUNT(*) AS total
+     FROM stickerpacks
+     WHERE (? = '' OR name LIKE ? COLLATE NOCASE)
+ `).get(search, searchTerm);
+
+ const total = Number(totalRow.total) || 0;
+ const hasMore = offset + rows.length < total;
+
+ let packsMap = {};
+ rows.forEach(item => {
+  packsMap[item.id] = item;
+ });
+
+ return {stickerpacks: packsMap, total, hasMore, limit, offset, search};
 });
+
 
 fastify.post('/api/v1/user/stickerpacks', {
  preHandler: authMiddle
