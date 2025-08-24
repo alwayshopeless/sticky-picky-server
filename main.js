@@ -317,6 +317,38 @@ fastify.get('/api/v1/stickerpacks/search', async (req, reply) => {
  return {results: rows};
 });
 
+
+fastify.get('/cors/*', async (request, reply) => {
+ let targetUrl = request.params['*'];
+
+ if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+  targetUrl = 'https://' + targetUrl;
+ }
+
+ try {
+  const res = await fetch(targetUrl);
+
+  const contentType = res.headers.get('content-type') || '';
+  let data;
+  if (contentType.includes('application/json')) {
+   data = await res.json();
+   reply.header('Content-Type', 'application/json');
+  } else {
+   data = await res.text();
+  }
+
+  reply
+   .header('Access-Control-Allow-Origin', '*')
+   .header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+   .header('Access-Control-Allow-Headers', 'Content-Type')
+   .send(data);
+
+ } catch (err) {
+  reply.status(500).send({error: 'Request failed', details: err.message});
+ }
+});
+
+
 // Start server
 try {
  await fastify.listen({port: 3000});

@@ -26,3 +26,5 @@ CREATE TABLE IF NOT EXISTS user_stickerpacks
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     FOREIGN KEY (stickerpack_id) REFERENCES stickerpacks (id) ON DELETE CASCADE
 );
+
+
