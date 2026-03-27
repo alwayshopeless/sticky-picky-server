@@ -1,10 +1,12 @@
+USE sticky_picky;
+
 CREATE TABLE IF NOT EXISTS users
 (
     id        INT PRIMARY KEY AUTO_INCREMENT,
     token     VARCHAR(64)  NOT NULL,
     matrix_id VARCHAR(200) NOT NULL UNIQUE,
-    favorites JSON DEFAULT '[]',
-    recent    JSON DEFAULT '[]'
+    favorites JSON DEFAULT (JSON_ARRAY()),
+    recent    JSON DEFAULT (JSON_ARRAY())
 );
 
 CREATE TABLE IF NOT EXISTS stickerpacks

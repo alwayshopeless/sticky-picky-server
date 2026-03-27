@@ -1,11 +1,10 @@
 export const dbConfig = {
- host: "localhost",
- port: "3306",
+ host: process.env.DB_HOST || "localhost",
+ port: process.env.DB_PORT || "3306",
 
- user: "sticky-picky",
- password: "qwertyui", // REPLACE IT ON PRODUCTION!!!!!!!
-
- database: "sticky_picky",
+ user: process.env.DB_USER || "sticky-picky",
+ password: process.env.DB_PASSWORD,
+ database: process.env.DB_NAME || "sticky_picky",
 
  waitForConnections: true,
  connectionLimit: 10,

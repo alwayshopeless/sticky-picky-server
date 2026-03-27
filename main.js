@@ -350,8 +350,11 @@ fastify.get('/cors/*', async (request, reply) => {
 
 
 // Start server
+const PORT = process.env.APP_PORT || 3000;
+const HOST = process.env.APP_HOST || '0.0.0.0';
+
 try {
- await fastify.listen({port: 3000});
+ await fastify.listen({port: Number(PORT), host: HOST});
 } catch (err) {
  fastify.log.error(err);
  process.exit(1);
