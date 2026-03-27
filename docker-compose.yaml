@@ -1,0 +1,62 @@
+services:
+  db:
+    env_file:
+      - .env
+    image: mysql:8.0
+    container_name: sticker-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - sticker-internal
+    ports:
+      - ${DB_PORT}:${DB_PORT}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${DB_USER}", "-p${DB_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  app:
+    env_file:
+      - .env
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sticker-server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    networks:
+      - sticker-internal
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sticker-api.rule=Host(`${APP_BACKEND_DOMAIN}`)"
+      - "traefik.http.routers.sticker-api.entrypoints=web-secure"
+      - "traefik.http.routers.sticker-api.tls=true"
+      - "traefik.http.routers.sticker-api.tls.certresolver=default"
+      - "traefik.http.services.sticker-api.loadbalancer.server.port=3000"
+      - "traefik.docker.network=traefik"
+
+networks:
+  traefik:
+    external: true
+  sticker-internal:
+    driver: bridge
+
+volumes:
+  db_data:
