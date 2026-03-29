@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { RowDataPacket } from 'mysql2/promise';
 import { pool } from '../db/pool.js';
 import { authMiddleware } from '../middleware/auth.js';
@@ -14,8 +14,43 @@ interface RemoveStickerBody {
   spUid?: string;
 }
 
+async function attachStickerpack(request: FastifyRequest<{ Body: StickerpackSelectionBody }>, reply: FastifyReply) {
+  const { stickerpack_id: stickerpackId } = request.body;
+
+  try {
+    await pool.query(
+      `INSERT INTO user_stickerpacks (user_id, stickerpack_id)
+       VALUES (?, ?)`,
+      [request.user!.id, stickerpackId],
+    );
+  } catch (error) {
+    const duplicate = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ER_DUP_ENTRY';
+    if (duplicate) {
+      return { success: true, already_attached: true };
+    }
+
+    return reply.code(400).send({ error: (error as Error).message });
+  }
+
+  return { success: true };
+}
+
+async function detachStickerpack(request: FastifyRequest<{ Body: StickerpackSelectionBody }>) {
+  const { stickerpack_id: stickerpackId } = request.body;
+
+  await pool.query(
+    `DELETE
+     FROM user_stickerpacks
+     WHERE user_id = ?
+       AND stickerpack_id = ?`,
+    [request.user!.id, stickerpackId],
+  );
+
+  return { success: true };
+}
+
 export async function registerUserRoutes(fastify: FastifyInstance) {
-  fastify.post('/api/v1/user/stickerpacks', { preHandler: authMiddleware }, async (request) => {
+  fastify.get('/api/v1/user/stickerpacks', { preHandler: authMiddleware }, async (request) => {
     const [rows] = await pool.query<(StickerpackRow & RowDataPacket)[]>(
       `SELECT s.*, usp.stickerpack_id
        FROM user_stickerpacks usp
@@ -28,41 +63,15 @@ export async function registerUserRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post<{ Body: StickerpackSelectionBody }>(
-    '/api/v1/user/stickerpacks/add',
+    '/api/v1/user/stickerpack/attach',
     { preHandler: authMiddleware },
-    async (request, reply) => {
-      const { stickerpack_id: stickerpackId } = request.body;
-
-      try {
-        await pool.query(
-          `INSERT INTO user_stickerpacks (user_id, stickerpack_id)
-           VALUES (?, ?)`,
-          [request.user!.id, stickerpackId],
-        );
-      } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
-      }
-
-      return { success: true };
-    },
+    attachStickerpack,
   );
 
   fastify.post<{ Body: StickerpackSelectionBody }>(
-    '/api/v1/user/stickerpacks/remove',
+    '/api/v1/user/stickerpack/detach',
     { preHandler: authMiddleware },
-    async (request) => {
-      const { stickerpack_id: stickerpackId } = request.body;
-
-      await pool.query(
-        `DELETE
-         FROM user_stickerpacks
-         WHERE user_id = ?
-           AND stickerpack_id = ?`,
-        [request.user!.id, stickerpackId],
-      );
-
-      return { success: true };
-    },
+    detachStickerpack,
   );
 
   fastify.get('/api/v1/user/stickers', { preHandler: authMiddleware }, async (request) => {
