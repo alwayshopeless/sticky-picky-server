@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { RowDataPacket } from 'mysql2/promise';
 import { pool } from '../db/pool.js';
+import {
+  errorResponseSchema,
+  stickerPayloadSchema,
+  stickerWithUidSchema,
+  stickerpackSchema,
+  successResponseSchema,
+} from '../docs/schemas.js';
 import { authMiddleware } from '../middleware/auth.js';
 import type { StickerPayload, StickerpackRow, StickerWithUid } from '../types/models.js';
 import { parseJsonArray } from '../utils/json.js';
@@ -14,6 +21,9 @@ interface RemoveStickerBody {
   spUid?: string;
 }
 
+const authSecuritySchema = [{ bearerAuth: [] }] as const;
+
+// Add stickerpack for user
 async function attachStickerpack(request: FastifyRequest<{ Body: StickerpackSelectionBody }>, reply: FastifyReply) {
   const { stickerpack_id: stickerpackId } = request.body;
 
@@ -35,6 +45,7 @@ async function attachStickerpack(request: FastifyRequest<{ Body: StickerpackSele
   return { success: true };
 }
 
+// Remove stickerpack for user
 async function detachStickerpack(request: FastifyRequest<{ Body: StickerpackSelectionBody }>) {
   const { stickerpack_id: stickerpackId } = request.body;
 
@@ -50,7 +61,38 @@ async function detachStickerpack(request: FastifyRequest<{ Body: StickerpackSele
 }
 
 export async function registerUserRoutes(fastify: FastifyInstance) {
-  fastify.get('/api/v1/user/stickerpacks', { preHandler: authMiddleware }, async (request) => {
+  fastify.get('/api/v1/user/stickerpacks', {
+    preHandler: authMiddleware,
+    schema: {
+      tags: ['User'],
+      summary: 'Get sticker packs attached to the current user',
+      security: authSecuritySchema,
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            stickerpacks: {
+              type: 'array',
+              items: {
+                allOf: [
+                  stickerpackSchema,
+                  {
+                    type: 'object',
+                    properties: {
+                      stickerpack_id: { type: 'integer' },
+                    },
+                    required: ['stickerpack_id'],
+                  },
+                ],
+              },
+            },
+          },
+          required: ['stickerpacks'],
+        },
+        401: errorResponseSchema,
+      },
+    },
+  }, async (request) => {
     const [rows] = await pool.query<(StickerpackRow & RowDataPacket)[]>(
       `SELECT s.*, usp.stickerpack_id
        FROM user_stickerpacks usp
@@ -62,28 +104,119 @@ export async function registerUserRoutes(fastify: FastifyInstance) {
     return { stickerpacks: rows };
   });
 
+  // Add stickerpack for user
   fastify.post<{ Body: StickerpackSelectionBody }>(
     '/api/v1/user/stickerpack/attach',
-    { preHandler: authMiddleware },
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['User'],
+        summary: 'Attach a sticker pack to the current user',
+        security: authSecuritySchema,
+        body: {
+          type: 'object',
+          properties: {
+            stickerpack_id: { type: 'integer' },
+          },
+          required: ['stickerpack_id'],
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              already_attached: { type: 'boolean' },
+            },
+            required: ['success'],
+          },
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
     attachStickerpack,
   );
 
+  // Remove a sticker pack from a user's personal sticker packs
   fastify.post<{ Body: StickerpackSelectionBody }>(
     '/api/v1/user/stickerpack/detach',
-    { preHandler: authMiddleware },
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['User'],
+        summary: 'Detach a sticker pack from the current user',
+        security: authSecuritySchema,
+        body: {
+          type: 'object',
+          properties: {
+            stickerpack_id: { type: 'integer' },
+          },
+          required: ['stickerpack_id'],
+        },
+        response: {
+          200: successResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
     detachStickerpack,
   );
 
-  fastify.get('/api/v1/user/stickers', { preHandler: authMiddleware }, async (request) => {
+  fastify.get('/api/v1/user/stickers', {
+    preHandler: authMiddleware,
+    schema: {
+      tags: ['User'],
+      summary: 'Get current user favorites and recent stickers',
+      security: authSecuritySchema,
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            favorites: {
+              type: 'array',
+              items: stickerWithUidSchema,
+            },
+            recent: {
+              type: 'array',
+              items: stickerWithUidSchema,
+            },
+          },
+          required: ['favorites', 'recent'],
+        },
+        401: errorResponseSchema,
+      },
+    },
+  }, async (request) => {
     return {
       favorites: parseJsonArray<StickerWithUid>(request.user!.favorites),
       recent: parseJsonArray<StickerWithUid>(request.user!.recent),
     };
   });
 
+  // Add new sticker to user's favorites list
   fastify.post<{ Body: StickerPayload }>(
     '/api/v1/user/stickers/favorites/add',
-    { preHandler: authMiddleware },
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['User'],
+        summary: 'Add a sticker to favorites',
+        security: authSecuritySchema,
+        body: stickerPayloadSchema,
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              sticker: stickerWithUidSchema,
+            },
+            required: ['success', 'sticker'],
+          },
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
     async (request, reply) => {
       const { repository, body, url, info } = request.body;
 
@@ -96,9 +229,29 @@ export async function registerUserRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // Remove sticker to user's favorites list
   fastify.post<{ Body: RemoveStickerBody }>(
     '/api/v1/user/stickers/favorites/remove',
-    { preHandler: authMiddleware },
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['User'],
+        summary: 'Remove a sticker from favorites',
+        security: authSecuritySchema,
+        body: {
+          type: 'object',
+          properties: {
+            spUid: { type: 'string' },
+          },
+          required: ['spUid'],
+        },
+        response: {
+          200: successResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
     async (request, reply) => {
       const { spUid } = request.body;
 
@@ -111,9 +264,30 @@ export async function registerUserRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // Add new sticker to user's recents list
   fastify.post<{ Body: StickerPayload }>(
     '/api/v1/user/stickers/recent/add',
-    { preHandler: authMiddleware },
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['User'],
+        summary: 'Add a sticker to recent history',
+        security: authSecuritySchema,
+        body: stickerPayloadSchema,
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              sticker: stickerWithUidSchema,
+            },
+            required: ['success', 'sticker'],
+          },
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
     async (request, reply) => {
       const { repository, body, url, info } = request.body;
 
@@ -126,9 +300,29 @@ export async function registerUserRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // Remove sticker to user's favorites list
   fastify.post<{ Body: RemoveStickerBody }>(
     '/api/v1/user/stickers/recent/remove',
-    { preHandler: authMiddleware },
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['User'],
+        summary: 'Remove a sticker from recent history',
+        security: authSecuritySchema,
+        body: {
+          type: 'object',
+          properties: {
+            spUid: { type: 'string' },
+          },
+          required: ['spUid'],
+        },
+        response: {
+          200: successResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    },
     async (request, reply) => {
       const { spUid } = request.body;
 

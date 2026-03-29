@@ -31,6 +31,7 @@ The project is a Fastify + MySQL backend for the Sticky Picky project. In genera
 - Fastify
 - MySQL
 - Docker
+- Scalar API Reference
 - `pnpm`
 
 ## API Overview
@@ -97,6 +98,14 @@ pnpm dev
 
 The app will start on `APP_HOST:APP_PORT` and initialize the database schema automatically from schema.sql.
 
+## API Documentation
+
+The project includes OpenAPI-based API documentation rendered with Scalar.
+
+- In non-production environments, the docs are available at `/docs`
+- In `production`, the docs are disabled by default
+- You can override this behavior with `API_DOCS_ENABLED=true` or `API_DOCS_ENABLED=false`
+
 ## Running With Docker Compose
 
 This repository includes a MySQL + app setup:
@@ -121,4 +130,5 @@ docker compose -f docker-compose.yaml -f docker-compose.traefik.yaml up --build
 
 - The schema is initialized automatically during app startup.
 - CORS is currently configured with `origin: *`.
+- API docs are enabled by default only outside production.
 - Imported sticker packs are expected to expose a `packs/index.json` file and individual pack JSON files under `packs/` from Maunium Stickerpicker: https://github.com/maunium/stickerpicker

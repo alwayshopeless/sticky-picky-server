@@ -2,6 +2,7 @@ services:
   app:
     environment:
       CI: "true"
+      API_DOCS_ENABLED: "true"
     command: ["sh", "-c", "pnpm install --frozen-lockfile && pnpm dev"]
     ports:
       - "127.0.0.1:${APP_PORT}:${APP_PORT}"

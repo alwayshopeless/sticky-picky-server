@@ -1,6 +1,8 @@
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
+import { env } from './config/env.js';
 import { initSchema } from './db/initSchema.js';
+import { registerApiDocs } from './docs/registerApiDocs.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerCorsProxyRoutes } from './routes/corsProxy.js';
 import { registerStickerpackRoutes } from './routes/stickerpacks.js';
@@ -10,6 +12,11 @@ export async function buildApp() {
   const fastify = Fastify({ logger: true });
 
   await fastify.register(cors, { origin: '*' });
+
+  if (env.apiDocsEnabled) {
+    await registerApiDocs(fastify);
+  }
+
   await initSchema();
 
   await registerAuthRoutes(fastify);

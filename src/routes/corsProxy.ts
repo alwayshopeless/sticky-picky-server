@@ -5,7 +5,11 @@ interface CorsProxyParams {
 }
 
 export async function registerCorsProxyRoutes(fastify: FastifyInstance) {
-  fastify.get<{ Params: CorsProxyParams }>('/cors/*', async (request, reply) => {
+  fastify.get<{ Params: CorsProxyParams }>('/cors/*', {
+    schema: {
+      hide: true,
+    },
+  }, async (request, reply) => {
     let targetUrl = request.params['*'];
 
     if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
