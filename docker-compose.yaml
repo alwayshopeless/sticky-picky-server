@@ -40,21 +40,13 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
+      APP_HOST: ${APP_HOST}
+      APP_PORT: ${APP_PORT}
     networks:
       - sticker-internal
-      - traefik
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.sticker-api.rule=Host(`${APP_BACKEND_DOMAIN}`)"
-      - "traefik.http.routers.sticker-api.entrypoints=web-secure"
-      - "traefik.http.routers.sticker-api.tls=true"
-      - "traefik.http.routers.sticker-api.tls.certresolver=default"
-      - "traefik.http.services.sticker-api.loadbalancer.server.port=3000"
-      - "traefik.docker.network=traefik"
+
 
 networks:
-  traefik:
-    external: true
   sticker-internal:
     driver: bridge
 

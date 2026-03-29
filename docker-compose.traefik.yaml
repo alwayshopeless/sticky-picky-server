@@ -1,0 +1,17 @@
+services:
+  app:
+    networks:
+      - sticker-internal
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.sticker-server.rule=Host(`${APP_BACKEND_DOMAIN}`)
+      - traefik.http.routers.sticker-server.entrypoints=websecure
+      - traefik.http.routers.sticker-server.tls=true
+      - traefik.http.services.sticker-server.loadbalancer.server.port=${APP_PORT}
+
+
+networks:
+  traefik:
+    external: true

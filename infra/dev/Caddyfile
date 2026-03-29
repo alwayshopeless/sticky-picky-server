@@ -1,0 +1,4 @@
+{$APP_BACKEND_DOMAIN} {
+  tls internal
+  reverse_proxy app:{$APP_PORT}
+}
