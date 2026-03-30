@@ -110,30 +110,71 @@ The project includes OpenAPI-based API documentation rendered with Scalar.
 - In `production`, the docs are disabled by default
 - You can override this behavior with `API_DOCS_ENABLED=true` or `API_DOCS_ENABLED=false`
 
-## Running With Docker Compose
+## Recommended Deployment
 
-This repository includes a MySQL + app setup:
+The current self-hosting path is the Traefik-based setup in [`deployment/traefik/`](deployment/traefik/README.md).
+
+This is the recommended way to deploy the full application at a pinned release version:
+
+```bash
+git clone --branch v1.0.0 --depth 1 https://github.com/alwayshopeless/sticky-picky-server.git
+cd sticky-picky-server/deployment/traefik
+cp .env.example .env
+```
+
+Then edit `.env` and set at least:
+
+- `APP_DOMAIN`
+- `FRONTEND_VERSION`
+- `TRAEFIK_NETWORK`
+- `TRAEFIK_CERTRESOLVER`
+- `MYSQL_DATABASE`
+- `MYSQL_USER`
+- `MYSQL_PASSWORD`
+- `MYSQL_ROOT_PASSWORD`
+
+After that, start the stack:
+
+```bash
+docker compose up -d --build
+```
+
+This deployment flow will:
+
+- build the backend container from this repository
+- run database migrations automatically on startup
+- download the frontend release artifact for `FRONTEND_VERSION` during the frontend image build
+- serve the frontend through nginx
+- route `/api` to the backend through Traefik on the same domain
+- replace `__BACKEND_URL__` in the frontend with `https://APP_DOMAIN/api/v1/` at container startup
+
+This setup expects:
+
+- an existing Traefik instance
+- a shared external Docker network for Traefik, for example `traefik`
+- a public DNS record pointing `APP_DOMAIN` to your server
+
+## Local Docker Compose
+
+For local backend-only development, this repository still includes the older root compose files:
 
 ```bash
 docker compose up --build
 ```
 
-There is also a development compose file with an additional Caddy-based reverse proxy:
+There is also a local development variant with an extra reverse proxy:
 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up --build
 ```
 
-There is also a separate Traefik override config for deployments behind an existing Traefik instance:
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.traefik.yaml up --build
-```
+These are still useful for local work, but they are no longer the main documented self-hosting path.
 
 ## Notes
 
 - Database migrations are applied automatically during app startup using `Umzug` and the migrations in `src/db/migrations`.
 - Existing instances can update in place: new columns and tables are added through migrations without requiring a fresh database.
+- The frontend is versioned independently and is expected to be deployed from its GitHub release artifacts by tag, for example `v1.0.0`.
 - CORS is currently configured with `origin: *`.
 - API docs are enabled by default only outside production.
 - Imported sticker packs are expected to expose a `packs/index.json` file and individual pack JSON files under `packs/` from Maunium Stickerpicker: https://github.com/maunium/stickerpicker
