@@ -10,6 +10,7 @@ import {
 } from '../docs/schemas.js';
 import { authMiddleware } from '../middleware/auth.js';
 import type { StickerPayload, StickerpackRow, StickerWithUid } from '../types/models.js';
+import { canAttachStickerpack, getStickerpackById } from '../services/stickerpacks.js';
 import { parseJsonArray } from '../utils/json.js';
 import { removeUserSticker, updateUserStickers } from '../services/userStickers.js';
 
@@ -26,6 +27,20 @@ const authSecuritySchema = [{ bearerAuth: [] }] as const;
 // Add stickerpack for user
 async function attachStickerpack(request: FastifyRequest<{ Body: StickerpackSelectionBody }>, reply: FastifyReply) {
   const { stickerpack_id: stickerpackId } = request.body;
+
+  if (!stickerpackId) {
+    return reply.code(400).send({ error: 'Missing stickerpack_id' });
+  }
+
+  const stickerpack = await getStickerpackById(stickerpackId);
+  if (!stickerpack) {
+    return reply.code(404).send({ error: 'Stickerpack not found' });
+  }
+
+  const allowed = await canAttachStickerpack(stickerpack, request.user!.id);
+  if (!allowed) {
+    return reply.code(403).send({ error: 'You do not have access to attach this stickerpack' });
+  }
 
   try {
     await pool.query(
@@ -130,6 +145,8 @@ export async function registerUserRoutes(fastify: FastifyInstance) {
             required: ['success'],
           },
           400: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
           401: errorResponseSchema,
         },
       },

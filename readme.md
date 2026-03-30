@@ -11,6 +11,7 @@ The project is a Fastify + MySQL backend for the Sticky Picky project. In genera
 - authenticating users through their Matrix homeserver using a Matrix access token
 - issuing and storing an internal API token for the client
 - storing sticker pack records in MySQL
+- storing Matrix MXC-backed sticker packs and their sticker metadata
 - importing sticker packs from remote repositories
 - attaching sticker packs to user accounts
 - storing user-specific `favorites` and `recent` sticker lists
@@ -19,7 +20,7 @@ The project is a Fastify + MySQL backend for the Sticky Picky project. In genera
 ## Common info
 
 - Matrix-based login flow
-- automatic schema initialization on startup
+- automatic schema migrations on startup
 - sticker pack creation and bulk import
 - custom stickers list for every user
 - favorites and recent sticker history management
@@ -42,7 +43,7 @@ The server registers the following route groups:
   Handles login through Matrix OpenID-style user verification and returns an internal token for further API calls.
 
 - `/api/v1/stickerpacks`
-  Creates sticker pack records, imports packs from remote repositories, lists all stored packs, and supports search.
+  Creates sticker pack records, imports packs from remote repositories, lists public packs, supports search, and manages Matrix MXC-backed sticker packs and sticker entries.
 
 - `/api/v1/user`
   Returns the current user's sticker packs, favorites, and recent stickers, and allows modifying that data.
@@ -61,16 +62,19 @@ After successful verification, the backend returns its own internal token. That 
 
 ## Data Model
 
-The database contains three main tables:
+The database now contains four main application tables:
 
 - `users`
   Stores the Matrix user ID, internal API token, and JSON arrays for `favorites` and `recent`.
 
 - `stickerpacks`
-  Stores repository information, homeserver, display name, internal pack name, and pack type.
+  Stores repository information, homeserver, display name, internal pack name, pack type, ownership, and visibility.
 
 - `user_stickerpacks`
   A join table linking users and sticker packs.
+
+- `stickerpack_stickers`
+  Stores per-pack sticker metadata for backend-managed Matrix MXC packs.
 
 ## Running Locally
 
@@ -96,7 +100,7 @@ CREATE DATABASE sticky_picky;
 pnpm dev
 ```
 
-The app will start on `APP_HOST:APP_PORT` and initialize the database schema automatically from schema.sql.
+The app will start on `APP_HOST:APP_PORT` and automatically run pending database migrations before serving requests.
 
 ## API Documentation
 
@@ -128,7 +132,8 @@ docker compose -f docker-compose.yaml -f docker-compose.traefik.yaml up --build
 
 ## Notes
 
-- The schema is initialized automatically during app startup.
+- Database migrations are applied automatically during app startup using `Umzug` and the migrations in `src/db/migrations`.
+- Existing instances can update in place: new columns and tables are added through migrations without requiring a fresh database.
 - CORS is currently configured with `origin: *`.
 - API docs are enabled by default only outside production.
 - Imported sticker packs are expected to expose a `packs/index.json` file and individual pack JSON files under `packs/` from Maunium Stickerpicker: https://github.com/maunium/stickerpicker

@@ -11,7 +11,11 @@ import { registerUserRoutes } from './routes/user.js';
 export async function buildApp() {
   const fastify = Fastify({ logger: true });
 
-  await fastify.register(cors, { origin: '*' });
+  await fastify.register(cors, {
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
 
   if (env.apiDocsEnabled) {
     await registerApiDocs(fastify);

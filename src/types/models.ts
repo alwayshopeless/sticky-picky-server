@@ -5,6 +5,20 @@ export interface StickerPayload {
   info: unknown;
 }
 
+export interface StickerpackStickerRow {
+  id: number;
+  stickerpack_id: number;
+  body: string;
+  url: string;
+  info: unknown;
+  sort_order: number;
+}
+
+export interface StickerpackStickerView extends StickerpackStickerRow {
+  repository: string;
+  stickerpack_type: string;
+}
+
 export interface UserRow {
   id: number;
   token: string | null;
@@ -20,6 +34,10 @@ export interface StickerpackRow {
   name: string;
   internal_name: string;
   type: string;
+  owner_user_id: number | null;
+  visibility: 'private' | 'public';
+  created_at: string;
+  updated_at: string;
 }
 
 export interface StickerpackCountRow {
