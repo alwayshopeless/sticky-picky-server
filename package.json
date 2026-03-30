@@ -1,6 +1,6 @@
 {
   "type": "module",
-  "name": "matrix-sticker-picker",
+  "name": "matrix-sticker-picker-backend",
   "version": "1.0.0",
   "description": "",
   "main": "dist/server.js",
