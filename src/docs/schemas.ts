@@ -25,10 +25,16 @@ export const stickerpackSchema = {
     type: { type: 'string' },
     owner_user_id: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
     visibility: { type: 'string' },
+    share_id: { type: 'string' },
+    parent_ref: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    parent_share_id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    parent_media_homeserver: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    source_aggregator_host: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    import_target_homeserver: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     created_at: { type: 'string' },
     updated_at: { type: 'string' },
   },
-  required: ['id', 'repository', 'homeserver', 'name', 'internal_name', 'type', 'owner_user_id', 'visibility', 'created_at', 'updated_at'],
+  required: ['id', 'repository', 'homeserver', 'name', 'internal_name', 'type', 'owner_user_id', 'visibility', 'share_id', 'parent_ref', 'parent_share_id', 'parent_media_homeserver', 'source_aggregator_host', 'import_target_homeserver', 'created_at', 'updated_at'],
 } as const;
 
 export const stickerpackStickerSchema = {

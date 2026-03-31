@@ -28,10 +28,11 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
           200: {
             type: 'object',
             properties: {
+              user_id: { type: 'integer' },
               token: { type: 'string' },
               matrix_id: { type: 'string' },
             },
-            required: ['token', 'matrix_id'],
+            required: ['user_id', 'token', 'matrix_id'],
           },
           400: errorResponseSchema,
           401: errorResponseSchema,
@@ -47,7 +48,9 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
 
       const matrixId = await authenticateMatrixUser(userToken, homeserver);
       if (!matrixId) {
-        return reply.code(401).send({ error: 'Invalid Matrix token' });
+        return reply.code(401).send({ 
+          error: 'Invalid Matrix token',
+         });
       }
 
       let user = await findUserByMatrixId(matrixId);
@@ -56,7 +59,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
       }
 
       user = await ensureUserToken(user);
-      return { token: user.token, matrix_id: user.matrix_id };
+      return { user_id: user.id, token: user.token, matrix_id: user.matrix_id };
     },
   );
 }

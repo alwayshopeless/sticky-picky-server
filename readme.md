@@ -117,7 +117,7 @@ The current self-hosting path is the Traefik-based setup in [`deployment/traefik
 This is the recommended way to deploy the full application at a pinned release version:
 
 ```bash
-git clone --branch v1.0.0 --depth 1 https://github.com/alwayshopeless/sticky-picky-server.git
+git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/alwayshopeless/sticky-picky-server.git
 cd sticky-picky-server/deployment/traefik
 cp .env.example .env
 ```
@@ -174,7 +174,7 @@ These are still useful for local work, but they are no longer the main documente
 
 - Database migrations are applied automatically during app startup using `Umzug` and the migrations in `src/db/migrations`.
 - Existing instances can update in place: new columns and tables are added through migrations without requiring a fresh database.
-- The frontend is versioned independently and is expected to be deployed from its GitHub release artifacts by tag, for example `v1.0.0`.
+- The frontend is versioned independently and is expected to be deployed from its GitHub release artifacts by tag, for example `v2.0.0-rc.1`.
 - CORS is currently configured with `origin: *`.
 - API docs are enabled by default only outside production.
 - Imported sticker packs are expected to expose a `packs/index.json` file and individual pack JSON files under `packs/` from Maunium Stickerpicker: https://github.com/maunium/stickerpicker

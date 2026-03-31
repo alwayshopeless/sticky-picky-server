@@ -17,6 +17,43 @@ export async function getStickerpackById(stickerpackId: number) {
   return rows[0] as StickerpackRow | undefined;
 }
 
+export async function getStickerpackByShareId(shareId: string) {
+  const [rows] = await pool.query<(StickerpackRow & RowDataPacket)[]>(
+    `SELECT *
+     FROM stickerpacks
+     WHERE share_id = ?
+     LIMIT 1`,
+    [shareId],
+  );
+
+  return rows[0] as StickerpackRow | undefined;
+}
+
+export async function getStickerpackByParentRef(parentRef: string, importTargetHomeserver?: string | null) {
+  if (importTargetHomeserver) {
+    const [rows] = await pool.query<(StickerpackRow & RowDataPacket)[]>(
+      `SELECT *
+       FROM stickerpacks
+       WHERE parent_ref = ?
+         AND import_target_homeserver = ?
+       LIMIT 1`,
+      [parentRef, importTargetHomeserver],
+    );
+
+    return rows[0] as StickerpackRow | undefined;
+  }
+
+  const [rows] = await pool.query<(StickerpackRow & RowDataPacket)[]>(
+    `SELECT *
+     FROM stickerpacks
+     WHERE parent_ref = ?
+     LIMIT 1`,
+    [parentRef],
+  );
+
+  return rows[0] as StickerpackRow | undefined;
+}
+
 export async function listStickerpackStickers(stickerpackId: number) {
   const [rows] = await pool.query<(StickerpackStickerRow & RowDataPacket)[]>(
     `SELECT id, stickerpack_id, body, url, info, sort_order
@@ -54,6 +91,10 @@ export async function isStickerpackAttached(userId: number, stickerpackId: numbe
 }
 
 export async function canReadStickerpack(stickerpack: StickerpackRow, userId?: number) {
+  if (stickerpack.type === 'maunium') {
+    return true;
+  }
+
   if (!isMatrixBackedStickerpack(stickerpack.type)) {
     return false;
   }
@@ -79,6 +120,10 @@ export async function canAttachStickerpack(stickerpack: StickerpackRow, userId: 
   }
 
   return stickerpack.owner_user_id === userId;
+}
+
+export function canAttachStickerpackByShare(stickerpack: StickerpackRow) {
+  return isMatrixBackedStickerpack(stickerpack.type);
 }
 
 export async function createStickerpackAttachment(userId: number, stickerpackId: number) {

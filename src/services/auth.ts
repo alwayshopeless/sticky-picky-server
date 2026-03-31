@@ -13,7 +13,9 @@ export async function authenticateMatrixUser(userToken: string, homeserver: stri
   let response: Response;
   try {
     response = await fetch(url);
-  } catch {
+  } catch (e) {
+    console.log(url);
+    console.log(e);
     return null;
   }
 

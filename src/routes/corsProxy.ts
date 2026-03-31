@@ -19,13 +19,15 @@ export async function registerCorsProxyRoutes(fastify: FastifyInstance) {
     try {
       const response = await fetch(targetUrl);
       const contentType = response.headers.get('content-type') || '';
-
       let data: unknown;
       if (contentType.includes('application/json')) {
         data = await response.json();
         reply.header('Content-Type', 'application/json');
       } else {
         data = await response.text();
+        if (contentType) {
+          reply.header('Content-Type', contentType);
+        }
       }
 
       return reply

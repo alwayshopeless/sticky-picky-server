@@ -3,7 +3,7 @@ FROM alpine:3.20 AS downloader
 ARG FRONTEND_VERSION
 ARG FRONTEND_REPO=alwayshopeless/sticky-picky
 
-RUN apk add --no-cache curl unzip
+RUN apk add --no-cache curl sed unzip
 
 WORKDIR /tmp/frontend
 
@@ -11,7 +11,8 @@ RUN test -n "$FRONTEND_VERSION"
 
 RUN curl -fsSL -o frontend.zip \
   "https://github.com/${FRONTEND_REPO}/releases/download/${FRONTEND_VERSION}/sticky-picky-frontend-${FRONTEND_VERSION}-dist.zip" \
-  && unzip frontend.zip -d dist
+  && unzip frontend.zip -d dist \
+  && sed -i '/<!-- dev-scripts:start -->/,/<!-- dev-scripts:end -->/d' dist/index.html
 
 FROM nginx:alpine
 

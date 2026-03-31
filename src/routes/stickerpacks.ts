@@ -15,13 +15,14 @@ import {
   createStickerpackAttachment,
   createStickerpackSticker,
   getStickerpackById,
+  getStickerpackByShareId,
   isMatrixBackedStickerpack,
   listStickerpackStickers,
   toStickerpackStickerView,
 } from '../services/stickerpacks.js';
 import type { StickerpackCountRow, StickerpackRow, StickerpackStickerRow, UserRow } from '../types/models.js';
 import { normalizeName } from '../utils/text.js';
-import { generateToken } from '../utils/token.js';
+import { generateStickerpackShareId, generateToken } from '../utils/token.js';
 
 interface CreateStickerpackBody {
   repository?: string;
@@ -42,6 +43,10 @@ interface ImportStickerpacksBody {
   type?: string;
 }
 
+interface ImportMauniumPackBody {
+  pack_url?: string;
+}
+
 interface StickerpackListQuery {
   limit?: string | number;
   offset?: string | number;
@@ -57,6 +62,10 @@ interface StickerpackParams {
   stickerpackId: string;
 }
 
+interface StickerpackShareParams {
+  shareId: string;
+}
+
 interface StickerParams extends StickerpackParams {
   stickerId: string;
 }
@@ -68,13 +77,28 @@ interface ImportedIndex {
 
 interface ImportedPack {
   title?: string;
+  stickers?: Array<{
+    body?: string;
+    url?: string;
+    info?: unknown;
+  }>;
 }
 
 interface UpdateStickerBody {
   body?: string;
 }
 
+interface UpdateStickerpackBody {
+  name?: string;
+}
+
+interface ForkStickerpackResponse {
+  stickerpack_id: number;
+  stickerpack: StickerpackRow;
+}
+
 const authSecuritySchema = [{ bearerAuth: [] }] as const;
+const MAX_FORK_STICKERS = 250;
 
 async function getOptionalUser(request: FastifyRequest) {
   const token = request.headers.authorization?.replace('Bearer ', '').trim();
@@ -88,6 +112,80 @@ async function getOptionalUser(request: FastifyRequest) {
 function getHomeserverFromMatrixId(matrixId: string) {
   const homeserver = matrixId.split(':').slice(1).join(':');
   return homeserver || 'matrix.local';
+}
+
+function getHomeserverHost(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value).host || null;
+  } catch {
+    return value.replace(/^https?:\/\//, '').replace(/\/+$/, '') || null;
+  }
+}
+
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, '');
+}
+
+function joinRepositoryPath(repository: string, relativePath: string) {
+  const normalizedRepository = trimTrailingSlash(repository);
+  const normalizedPath = relativePath.replace(/^\/+/, '');
+  return `${normalizedRepository}/packs/${normalizedPath}`;
+}
+
+function resolveStickerAssetUrl(repository: string, stickerUrl?: string) {
+  if (!stickerUrl) {
+    return null;
+  }
+
+  if (/^(https?:\/\/|mxc:\/\/)/.test(stickerUrl)) {
+    return stickerUrl;
+  }
+
+  return joinRepositoryPath(repository, stickerUrl);
+}
+
+function parseMauniumPackUrl(packUrl: string) {
+  const parsed = new URL(packUrl);
+  const pathname = parsed.pathname;
+  const packsIndex = pathname.lastIndexOf('/packs/');
+  if (packsIndex === -1) {
+    throw new Error('Pack URL must point to /packs/<file>.json');
+  }
+
+  const repositoryPath = pathname.slice(0, packsIndex);
+  const internalName = pathname.slice(packsIndex + '/packs/'.length);
+  if (!internalName) {
+    throw new Error('Pack URL must include a pack file name');
+  }
+
+  return {
+    repository: `${parsed.origin}${repositoryPath}`,
+    internalName,
+  };
+}
+
+async function fetchMauniumPack(repository: string, internalName: string) {
+  const repositoryBase = trimTrailingSlash(repository);
+  const packResponse = await fetch(joinRepositoryPath(repositoryBase, internalName));
+  if (!packResponse.ok) {
+    throw new Error('Failed to fetch pack.json');
+  }
+
+  const packJson = (await packResponse.json()) as ImportedPack;
+  const indexResponse = await fetch(`${repositoryBase}/packs/index.json`);
+  if (!indexResponse.ok) {
+    throw new Error('Failed to fetch index.json');
+  }
+
+  const indexJson = (await indexResponse.json()) as ImportedIndex;
+  return {
+    packJson,
+    indexJson,
+  };
 }
 
 async function ensureStickerpackOwner(stickerpackId: number, userId: number, reply: FastifyReply) {
@@ -135,8 +233,9 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
             type: 'object',
             properties: {
               stickerpack_id: { type: 'integer' },
+              share_id: { type: 'string' },
             },
-            required: ['stickerpack_id'],
+            required: ['stickerpack_id', 'share_id'],
           },
           400: errorResponseSchema,
         },
@@ -154,13 +253,14 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
       }
 
       try {
+        const shareId = generateStickerpackShareId();
         const [result] = await pool.query<ResultSetHeader>(
-          `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type)
-           VALUES (?, ?, ?, ?, ?)`,
-          [repository, homeserver, normalizeName(name, internalName), internalName, type],
+          `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type, share_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [repository, homeserver, normalizeName(name, internalName), internalName, type, shareId],
         );
 
-        return { stickerpack_id: result.insertId };
+        return { stickerpack_id: result.insertId, share_id: shareId };
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });
       }
@@ -189,8 +289,9 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
             type: 'object',
             properties: {
               stickerpack_id: { type: 'integer' },
+              share_id: { type: 'string' },
             },
-            required: ['stickerpack_id'],
+            required: ['stickerpack_id', 'share_id'],
           },
           400: errorResponseSchema,
           401: errorResponseSchema,
@@ -209,15 +310,16 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
       const internalName = `matrix-mxc-${generateToken().slice(0, 12)}`;
       const repository = `matrix-mxc://${getHomeserverFromMatrixId(request.user!.matrix_id)}/`;
 
+      const shareId = generateStickerpackShareId();
       const [result] = await pool.query<ResultSetHeader>(
-        `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type, owner_user_id, visibility)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [repository, homeserver, normalizeName(name, internalName), internalName, normalizedType, request.user!.id, visibility],
+        `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type, owner_user_id, visibility, share_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [repository, homeserver, normalizeName(name, internalName), internalName, normalizedType, request.user!.id, visibility, shareId],
       );
 
       await createStickerpackAttachment(request.user!.id, result.insertId);
 
-      return { stickerpack_id: result.insertId };
+      return { stickerpack_id: result.insertId, share_id: shareId };
     },
   );
 
@@ -303,10 +405,11 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
             continue;
           }
 
+          const shareId = generateStickerpackShareId();
           const [result] = await pool.query<ResultSetHeader>(
-            `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type)
-             VALUES (?, ?, ?, ?, ?)`,
-            [repository, indexJson.homeserver_url, packJson.title || pack, pack, type],
+            `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type, share_id)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [repository, indexJson.homeserver_url, packJson.title || pack, pack, type, shareId],
           );
 
           created.push({ internal_name: pack, stickerpack_id: result.insertId, status: 'success' });
@@ -317,6 +420,142 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
       }
 
       return { imported: created };
+    },
+  );
+
+  fastify.post<{ Body: ImportMauniumPackBody }>(
+    '/api/v1/stickerpacks/import/maunium-pack',
+    {
+      schema: {
+        tags: ['Stickerpacks'],
+        summary: 'Import a single Maunium sticker pack from its pack JSON URL',
+        body: {
+          type: 'object',
+          properties: {
+            pack_url: { type: 'string' },
+          },
+          required: ['pack_url'],
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              status: { type: 'string' },
+              stickerpack_id: { type: 'integer' },
+              share_id: { type: 'string' },
+            },
+            required: ['status'],
+          },
+          400: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const packUrl = request.body.pack_url?.trim();
+      if (!packUrl) {
+        return reply.code(400).send({ error: 'Missing pack_url' });
+      }
+
+      let repository: string;
+      let internalName: string;
+
+      try {
+        ({ repository, internalName } = parseMauniumPackUrl(packUrl));
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+
+      try {
+        const { packJson, indexJson } = await fetchMauniumPack(repository, internalName);
+        const shareId = generateStickerpackShareId();
+        const [result] = await pool.query<ResultSetHeader>(
+          `INSERT INTO stickerpacks (repository, homeserver, name, internal_name, type, share_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            trimTrailingSlash(repository),
+            indexJson.homeserver_url || new URL(repository).origin,
+            normalizeName(packJson.title, internalName),
+            internalName,
+            'maunium',
+            shareId,
+          ],
+        );
+
+        return {
+          status: 'success',
+          stickerpack_id: result.insertId,
+          share_id: shareId,
+        };
+      } catch (error) {
+        const duplicate = typeof error === 'object' && error !== null && 'code' in error && error.code === 'ER_DUP_ENTRY';
+        if (duplicate) {
+          return { status: 'already_exists' };
+        }
+
+        return reply.code(400).send({ error: (error as Error).message || 'Failed to import Maunium pack' });
+      }
+    },
+  );
+
+  fastify.post<{ Params: StickerpackParams; Body: UpdateStickerpackBody }>(
+    '/api/v1/stickerpacks/:stickerpackId/edit',
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['Stickerpacks'],
+        summary: 'Rename a Matrix MXC-backed sticker pack',
+        security: authSecuritySchema,
+        params: {
+          type: 'object',
+          properties: {
+            stickerpackId: { type: 'string' },
+          },
+          required: ['stickerpackId'],
+        },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+          },
+          required: ['name'],
+        },
+        response: {
+          200: successResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const stickerpackId = Number(request.params.stickerpackId);
+      if (!Number.isInteger(stickerpackId) || stickerpackId < 1) {
+        return reply.code(400).send({ error: 'Invalid stickerpack id' });
+      }
+
+      const stickerpack = await ensureStickerpackOwner(stickerpackId, request.user!.id, reply);
+      if (!stickerpack || 'statusCode' in stickerpack) {
+        return stickerpack;
+      }
+
+      const normalizedName = request.body.name?.trim();
+      if (!normalizedName) {
+        return reply.code(400).send({ error: 'Missing stickerpack name' });
+      }
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `UPDATE stickerpacks
+         SET name = ?
+         WHERE id = ?`,
+        [normalizeName(normalizedName, stickerpack.internal_name), stickerpack.id],
+      );
+
+      if (result.affectedRows === 0) {
+        return reply.code(404).send({ error: 'Stickerpack not found' });
+      }
+
+      return { success: true };
     },
   );
 
@@ -452,6 +691,59 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
       );
 
       return { results: rows };
+    },
+  );
+
+  fastify.get<{ Params: StickerpackShareParams }>(
+    '/api/v1/stickerpacks/share/:shareId/export',
+    {
+      schema: {
+        tags: ['Stickerpacks'],
+        summary: 'Export a sticker pack by share id for federation/import',
+        params: {
+          type: 'object',
+          properties: {
+            shareId: { type: 'string' },
+          },
+          required: ['shareId'],
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              stickerpack: stickerpackSchema,
+              stickers: {
+                type: 'array',
+                items: stickerpackStickerSchema,
+              },
+            },
+            required: ['stickerpack', 'stickers'],
+          },
+          400: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const shareId = request.params.shareId?.trim();
+      if (!shareId) {
+        return reply.code(400).send({ error: 'Missing share id' });
+      }
+
+      const stickerpack = await getStickerpackByShareId(shareId);
+      if (!stickerpack) {
+        return reply.code(404).send({ error: 'Stickerpack not found' });
+      }
+
+      if (!isMatrixBackedStickerpack(stickerpack.type)) {
+        return reply.code(400).send({ error: 'Stickerpack cannot be exported through this endpoint' });
+      }
+
+      const stickers = await listStickerpackStickers(stickerpack.id);
+      return {
+        stickerpack,
+        stickers: stickers.map((sticker) => toStickerpackStickerView(stickerpack, sticker)),
+      };
     },
   );
 
@@ -735,6 +1027,131 @@ export async function registerStickerpackRoutes(fastify: FastifyInstance) {
       );
 
       return { success: true };
+    },
+  );
+
+  fastify.post<{ Params: StickerpackParams }>(
+    '/api/v1/stickerpacks/:stickerpackId/fork',
+    {
+      preHandler: authMiddleware,
+      schema: {
+        tags: ['Stickerpacks'],
+        summary: 'Fork a readable sticker pack into a user-owned editable pack',
+        security: authSecuritySchema,
+        params: {
+          type: 'object',
+          properties: {
+            stickerpackId: { type: 'string' },
+          },
+          required: ['stickerpackId'],
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              stickerpack_id: { type: 'integer' },
+              stickerpack: stickerpackSchema,
+            },
+            required: ['stickerpack_id', 'stickerpack'],
+          },
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<ForkStickerpackResponse | FastifyReply> => {
+      const stickerpackId = Number(request.params.stickerpackId);
+      if (!Number.isInteger(stickerpackId) || stickerpackId < 1) {
+        return reply.code(400).send({ error: 'Invalid stickerpack id' });
+      }
+
+      const sourceStickerpack = await getStickerpackById(stickerpackId);
+      if (!sourceStickerpack) {
+        return reply.code(404).send({ error: 'Stickerpack not found' });
+      }
+
+      const allowed = await canReadStickerpack(sourceStickerpack, request.user!.id);
+      if (!allowed) {
+        return reply.code(403).send({ error: 'You do not have access to fork this stickerpack' });
+      }
+
+      const homeserverHost = getHomeserverFromMatrixId(request.user!.matrix_id);
+      const homeserver = `https://${homeserverHost}`;
+      const internalName = `matrix-mxc-${generateToken().slice(0, 12)}`;
+      const repository = `matrix-mxc://${homeserverHost}/`;
+      const forkName = normalizeName(`${sourceStickerpack.name} (Fork)`, internalName);
+      const shareId = generateStickerpackShareId();
+      const sourceStickers = isMatrixBackedStickerpack(sourceStickerpack.type)
+        ? (await listStickerpackStickers(sourceStickerpack.id)).map((sticker) => ({
+            body: sticker.body,
+            url: sticker.url,
+            info: sticker.info,
+          }))
+        : ((await fetchMauniumPack(sourceStickerpack.repository, sourceStickerpack.internal_name)).packJson.stickers ?? [])
+            .map((sticker) => ({
+              body: sticker.body || '😀',
+              url: resolveStickerAssetUrl(sourceStickerpack.repository, sticker.url),
+              info: sticker.info,
+            }))
+            .filter((sticker): sticker is { body: string; url: string; info: unknown } => Boolean(sticker.url));
+
+      if (sourceStickers.length > MAX_FORK_STICKERS) {
+        return reply.code(400).send({
+          error: `Stickerpack is too large to fork right now. Maximum supported size is ${MAX_FORK_STICKERS} stickers.`,
+        });
+      }
+
+      const [result] = await pool.query<ResultSetHeader>(
+        `INSERT INTO stickerpacks (
+          repository,
+          homeserver,
+          name,
+          internal_name,
+          type,
+          owner_user_id,
+          visibility,
+          share_id,
+          parent_ref,
+          parent_share_id,
+          parent_media_homeserver,
+          source_aggregator_host,
+          import_target_homeserver
+        )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          repository,
+          homeserver,
+          forkName,
+          internalName,
+          'user_owned',
+          request.user!.id,
+          'private',
+          shareId,
+          null,
+          null,
+          null,
+          null,
+          null,
+        ],
+      );
+
+      await createStickerpackAttachment(request.user!.id, result.insertId);
+
+      for (const sticker of sourceStickers) {
+        await createStickerpackSticker(result.insertId, sticker.body, sticker.url, sticker.info);
+      }
+
+      const createdStickerpack = await getStickerpackById(result.insertId);
+      if (!createdStickerpack) {
+        return reply.code(500).send({ error: 'Forked stickerpack was created but could not be loaded back' });
+      }
+
+      return {
+        stickerpack_id: result.insertId,
+        stickerpack: createdStickerpack,
+      };
     },
   );
 }
