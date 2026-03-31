@@ -26,7 +26,7 @@ Fill in:
 `FRONTEND_VERSION` should match a frontend GitHub release tag, for example:
 
 ```env
-FRONTEND_VERSION=v2.0.0-rc.1
+FRONTEND_VERSION=v2.0.0-rc.2
 ```
 
 ## 2. Start the stack
