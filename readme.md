@@ -117,7 +117,7 @@ The current self-hosting path is the Traefik-based setup in [`deployment/traefik
 This is the recommended way to deploy the full application at a pinned release version:
 
 ```bash
-git clone --branch v2.0.0-rc.2 --depth 1 https://github.com/alwayshopeless/sticky-picky-server.git
+git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/alwayshopeless/sticky-picky-server.git
 cd sticky-picky-server/deployment/traefik
 cp .env.example .env
 ```
@@ -132,6 +132,8 @@ Then edit `.env` and set at least:
 - `MYSQL_USER`
 - `MYSQL_PASSWORD`
 - `MYSQL_ROOT_PASSWORD`
+
+The default deployment config is prepared for frontend `v2.0.0-rc.2`.
 
 After that, start the stack:
 
