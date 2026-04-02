@@ -1,0 +1,6 @@
+tunnel: __DEV_TUNNEL_ID__
+credentials-file: __DEV_TUNNEL_CREDENTIALS_FILE__
+ingress:
+  - hostname: __DEV_TUNNEL_DOMAIN__
+    service: http://127.0.0.1:__DEV_PROXY_PORT__
+  - service: http_status:404

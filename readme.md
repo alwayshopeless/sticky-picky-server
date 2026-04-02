@@ -117,7 +117,7 @@ The current self-hosting path is the Traefik-based setup in [`deployment/traefik
 This is the recommended way to deploy the full application at a pinned release version:
 
 ```bash
-git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/alwayshopeless/sticky-picky-server.git
+git clone --branch v2.0.0-rc.3 --depth 1 https://github.com/alwayshopeless/sticky-picky-server.git
 cd sticky-picky-server/deployment/traefik
 cp .env.example .env
 ```
@@ -133,7 +133,7 @@ Then edit `.env` and set at least:
 - `MYSQL_PASSWORD`
 - `MYSQL_ROOT_PASSWORD`
 
-The default deployment config is prepared for frontend `v2.0.0-rc.2`.
+The default deployment config is prepared for frontend `v2.0.0-rc.3`.
 
 After that, start the stack:
 
@@ -156,27 +156,38 @@ This setup expects:
 - a shared external Docker network for Traefik, for example `traefik`
 - a public DNS record pointing `APP_DOMAIN` to your server
 
-## Local Docker Compose
+## Local Tunnel Development
 
-For local backend-only development, this repository still includes the older root compose files:
+For local development behind a single tunnel domain, use [`deployment/dev-tunnel/`](deployment/dev-tunnel/README.md).
+
+This flow keeps frontend and API on the same origin:
+
+- run Vite on the host for HMR
+- run MySQL, backend, and nginx in Docker
+- publish the local nginx endpoint through Cloudflare Tunnel
+
+From `deployment/dev-tunnel/`:
 
 ```bash
 docker compose up --build
 ```
 
-There is also a local development variant with an extra reverse proxy:
+Then run the frontend locally and point your tunnel at `http://127.0.0.1:8080`.
+
+There is also a helper script in the repository root:
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up --build
+./run-dev.sh
 ```
 
-These are still useful for local work, but they are no longer the main documented self-hosting path.
+It reads `deployment/dev-tunnel/.env`, starts the Docker stack, and then launches `cloudflared` for `DEV_TUNNEL_DOMAIN`.
+This uses a named Cloudflare Tunnel, not a temporary quick tunnel.
 
 ## Notes
 
 - Database migrations are applied automatically during app startup using `Umzug` and the migrations in `src/db/migrations`.
 - Existing instances can update in place: new columns and tables are added through migrations without requiring a fresh database.
-- The frontend is versioned independently and is expected to be deployed from its GitHub release artifacts by tag, for example `v2.0.0-rc.2`.
+- The frontend is versioned independently and is expected to be deployed from its GitHub release artifacts by tag, for example `v2.0.0-rc.3`.
 - CORS is currently configured with `origin: *`.
 - API docs are enabled by default only outside production.
 - Imported sticker packs are expected to expose a `packs/index.json` file and individual pack JSON files under `packs/` from Maunium Stickerpicker: https://github.com/maunium/stickerpicker
